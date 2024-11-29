@@ -168,63 +168,128 @@ function updateModelViewMatrix() {
     return modelViewMatrix;
 }
 
-// Enhanced OBJ loader with better normal calculation
-async function loadOBJ(url) {
+async function loadMTL(url) {
   const response = await fetch(url);
-  const objText = await response.text();
+  const mtlText = await response.text();
+  const materials = {};
+
+  let currentMaterial = null;
+  mtlText.split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    switch (parts[0]) {
+      case 'newmtl':
+        currentMaterial = parts[1];
+        materials[currentMaterial] = {
+          ambient: [1, 1, 1],
+          diffuse: [0.8, 0.8, 0.8],
+          specular: [0.5, 0.5, 0.5],
+          shininess: 32,
+          opacity: 1
+        };
+        break;
+      case 'Ka': // Ambient color
+        materials[currentMaterial].ambient = parts.slice(1).map(parseFloat);
+        break;
+      case 'Kd': // Diffuse color
+        materials[currentMaterial].diffuse = parts.slice(1).map(parseFloat);
+        break;
+      case 'Ks': // Specular color
+        materials[currentMaterial].specular = parts.slice(1).map(parseFloat);
+        break;
+      case 'Ns': // Shininess
+        materials[currentMaterial].shininess = parseFloat(parts[1]);
+        break;
+      case 'd': // Opacity
+        materials[currentMaterial].opacity = parseFloat(parts[1]);
+        break;
+    }
+  });
+
+  return materials;
+}
+
+async function loadOBJ(objUrl, mtlUrl) {
+  const [objResponse, mtlResponse] = await Promise.all([
+    fetch(objUrl),
+    mtlUrl ? loadMTL(mtlUrl) : Promise.resolve(null)
+  ]);
+  
+  const objText = await objResponse.text();
 
   const positions = [];
   const normals = [];
   const indices = [];
+  const materialIndices = [];
+  const materialGroups = {};
   const tempNormals = new Map();
+
+  let currentMaterial = null;
 
   const lines = objText.split("\n");
   for (const line of lines) {
     const parts = line.trim().split(/\s+/);
-    if (parts[0] === "v") {
-      positions.push(...parts.slice(1).map(parseFloat));
-    } else if (parts[0] === "f") {
-      const faceVertices = parts.slice(1).map(v => parseInt(v.split("/")[0]) - 1);
-      
-      // Calculate face normal using Newell's method for better accuracy
-      let nx = 0, ny = 0, nz = 0;
-      for (let i = 0; i < faceVertices.length; i++) {
-        const v1 = faceVertices[i];
-        const v2 = faceVertices[(i + 1) % faceVertices.length];
-        
-        const x1 = positions[v1 * 3];
-        const y1 = positions[v1 * 3 + 1];
-        const z1 = positions[v1 * 3 + 2];
-        const x2 = positions[v2 * 3];
-        const y2 = positions[v2 * 3 + 1];
-        const z2 = positions[v2 * 3 + 2];
-        
-        nx += (y1 - y2) * (z1 + z2);
-        ny += (z1 - z2) * (x1 + x2);
-        nz += (x1 - x2) * (y1 + y2);
-      }
-      
-      const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
-      if (length > 0) {
-        nx /= length;
-        ny /= length;
-        nz /= length;
-      }
-      
-      for (const vertex of faceVertices) {
-        if (!tempNormals.has(vertex)) {
-          tempNormals.set(vertex, [0, 0, 0]);
+    switch (parts[0]) {
+      case "v":
+        positions.push(...parts.slice(1).map(parseFloat));
+        break;
+      case "usemtl":
+        currentMaterial = parts[1];
+        if (!materialGroups[currentMaterial]) {
+          materialGroups[currentMaterial] = {
+            startIndex: indices.length,
+            indexCount: 0
+          };
         }
-        const n = tempNormals.get(vertex);
-        n[0] += nx;
-        n[1] += ny;
-        n[2] += nz;
-      }
-      
-      // Triangulate face if necessary
-      for (let i = 1; i < faceVertices.length - 1; i++) {
-        indices.push(faceVertices[0], faceVertices[i], faceVertices[i + 1]);
-      }
+        break;
+      case "f":
+        const faceVertices = parts.slice(1).map(v => parseInt(v.split("/")[0]) - 1);
+        
+        // Calculate face normal using Newell's method
+        let nx = 0, ny = 0, nz = 0;
+        for (let i = 0; i < faceVertices.length; i++) {
+          const v1 = faceVertices[i];
+          const v2 = faceVertices[(i + 1) % faceVertices.length];
+          
+          const x1 = positions[v1 * 3];
+          const y1 = positions[v1 * 3 + 1];
+          const z1 = positions[v1 * 3 + 2];
+          const x2 = positions[v2 * 3];
+          const y2 = positions[v2 * 3 + 1];
+          const z2 = positions[v2 * 3 + 2];
+          
+          nx += (y1 - y2) * (z1 + z2);
+          ny += (z1 - z2) * (x1 + x2);
+          nz += (x1 - x2) * (y1 + y2);
+        }
+        
+        const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (length > 0) {
+          nx /= length;
+          ny /= length;
+          nz /= length;
+        }
+        
+        for (const vertex of faceVertices) {
+          if (!tempNormals.has(vertex)) {
+            tempNormals.set(vertex, [0, 0, 0]);
+          }
+          const n = tempNormals.get(vertex);
+          n[0] += nx;
+          n[1] += ny;
+          n[2] += nz;
+        }
+        
+        // Triangulate face
+        for (let i = 1; i < faceVertices.length - 1; i++) {
+          indices.push(faceVertices[0], faceVertices[i], faceVertices[i + 1]);
+          materialIndices.push(currentMaterial, currentMaterial, currentMaterial);
+          
+          // Update material group index count
+          if (materialGroups[currentMaterial]) {
+            materialGroups[currentMaterial].indexCount += 3;
+          }
+        }
+        break;
     }
   }
 
@@ -268,7 +333,14 @@ async function loadOBJ(url) {
     positions[i + 2] = (positions[i + 2] - center[2]) * scale;
   }
 
-  return { positions, normals: normalArray, indices };
+  return { 
+    positions, 
+    normals: normalArray, 
+    indices, 
+    materialIndices, 
+    materialGroups,
+    materials: mtlResponse || {}
+  };
 }
 
 function createShaderProgram(gl, vsSource, fsSource) {
@@ -332,7 +404,8 @@ function createBuffers(gl, obj) {
 
 // Rest of the code remains largely the same, but with enhanced uniform setup
 async function main() {
-  const obj = await loadOBJ("model.obj");
+  // Load OBJ with associated MTL
+  const obj = await loadOBJ("model.obj", "model.mtl");
   const program = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
   gl.useProgram(program);
 
@@ -369,17 +442,9 @@ async function main() {
   mat4.perspective(projectionMatrix, Math.PI / 4, canvas.width / canvas.height, 0.1, 100.0);
   gl.uniformMatrix4fv(uniforms.uProjectionMatrix, false, projectionMatrix);
 
-  // Enhanced lighting setup
-  gl.uniform3fv(uniforms.uLightPosition, [5.0, 5.0, 5.0]);
-  gl.uniform3fv(uniforms.uAmbientColor, [0.2, 0.2, 0.25]); // Slightly blue ambient
-  gl.uniform3fv(uniforms.uDiffuseColor, [0.8, 0.8, 0.85]);
-  gl.uniform3fv(uniforms.uSpecularColor, [1.0, 1.0, 1.0]);
-  gl.uniform1f(uniforms.uShininess, 64.0); // Increased shininess
-  gl.uniform1f(uniforms.uRimLightIntensity, 0.7);
-  gl.uniform3fv(uniforms.uRimLightColor, [0.5, 0.5, 0.7]); // Subtle blue rim light
-
+  // Render function with multi-material support
   function render() {
-    gl.clearColor(0.95, 0.95, 0.95, 1.0); // Slightly lighter background
+    gl.clearColor(0.95, 0.95, 0.95, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const modelViewMatrix = updateModelViewMatrix();
@@ -390,7 +455,31 @@ async function main() {
     mat4.transpose(normalMatrix, normalMatrix);
     gl.uniformMatrix4fv(uniforms.uNormalMatrix, false, normalMatrix);
 
-    gl.drawElements(gl.TRIANGLES, obj.indices.length, gl.UNSIGNED_SHORT, 0);
+    // Render each material group separately
+    for (const [materialName, group] of Object.entries(obj.materialGroups)) {
+      const material = obj.materials[materialName] || {
+        ambient: [0.2, 0.2, 0.2],
+        diffuse: [0.8, 0.8, 0.8],
+        specular: [0.5, 0.5, 0.5],
+        shininess: 32,
+        opacity: 1
+      };
+
+      // Update material uniforms
+      gl.uniform3fv(uniforms.uAmbientColor, material.ambient);
+      gl.uniform3fv(uniforms.uDiffuseColor, material.diffuse);
+      gl.uniform3fv(uniforms.uSpecularColor, material.specular);
+      gl.uniform1f(uniforms.uShininess, material.shininess);
+
+      // Draw the specific material group
+      gl.drawElements(
+        gl.TRIANGLES, 
+        group.indexCount, 
+        gl.UNSIGNED_SHORT, 
+        group.startIndex * 2  // 2 bytes per index
+      );
+    }
+
     requestAnimationFrame(render);
   }
 
