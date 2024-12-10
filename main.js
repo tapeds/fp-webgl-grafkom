@@ -1,5 +1,5 @@
 const canvas = document.getElementById("webglCanvas");
-const gl = canvas.getContext("webgl", { 
+const gl = canvas.getContext("webgl", {
   antialias: true,
   preserveDrawingBuffer: true // Helps with screenshots
 });
@@ -53,51 +53,49 @@ const vertexShaderSource = `
 
 // Enhanced fragment shader with improved lighting model
 const fragmentShaderSource = `
-  precision highp float;
-  
+ precision highp float;
+
   varying vec3 vNormal;
   varying vec3 vPosition;
   varying vec3 vViewPosition;
-  
+
   uniform vec3 uLightPosition;
   uniform vec3 uAmbientColor;
   uniform vec3 uDiffuseColor;
   uniform vec3 uSpecularColor;
   uniform float uShininess;
-  uniform float uRimLightIntensity;
-  uniform vec3 uRimLightColor;
-  
-  void main() {
+  uniform float uOpacity;
+  uniform float uRefractionIndex;
+
+void main() {
     vec3 normal = normalize(vNormal);
-    vec3 lightDir = normalize(uLightPosition - vPosition);
     vec3 viewDir = normalize(vViewPosition);
+    vec3 lightDir = normalize(uLightPosition - vPosition);
     
-    // Ambient
-    vec3 ambient = uAmbientColor;
+    // Fresnel effect for glass-like transparency
+    float fresnelFactor = pow(1.0 - max(dot(normal, viewDir), 0.0), 5.0);
     
-    // Diffuse
-    float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = diff * uDiffuseColor;
-    
-    // Specular (Blinn-Phong)
+    // Specular (Blinn-Phong) with enhanced glass-like highlight
     vec3 halfwayDir = normalize(lightDir + viewDir);
     float spec = pow(max(dot(normal, halfwayDir), 0.0), uShininess);
     vec3 specular = spec * uSpecularColor;
     
-    // Rim lighting
-    float rimFactor = 1.0 - max(dot(viewDir, normal), 0.0);
-    rimFactor = pow(rimFactor, 3.0) * uRimLightIntensity;
-    vec3 rim = rimFactor * uRimLightColor;
+    // Refraction simulation
+    vec3 refractDir = refract(-viewDir, normal, 1.0 / uRefractionIndex);
     
-    // Final color
-    vec3 result = ambient + diffuse + specular + rim;
+    // Combine lighting effects
+    vec3 result = uAmbientColor + specular;
     
-    // Tone mapping and gamma correction
-    result = result / (result + vec3(1.0));
-    result = pow(result, vec3(1.0 / 2.2));
+    // Glass-like transparency and reflection
+    float reflectionStrength = fresnelFactor * 0.8;
+    float transparencyStrength = 1.0 - reflectionStrength;
     
-    gl_FragColor = vec4(result, 1.0);
-  }
+    // Final color with transparency
+    gl_FragColor = vec4(
+        result, 
+        uOpacity * (transparencyStrength + reflectionStrength * 0.5)
+    );
+}
 `;
 
 // Enhanced camera controls
@@ -105,67 +103,67 @@ let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
 let rotationX = 0;
-let rotationY = 0;
+let rotationY = 0;  
 let zoomLevel = 5;
 let autoRotate = true;
 let autoRotateSpeed = 0.001;
 
 function setupMouseControls(canvas) {
-    canvas.addEventListener('mousedown', (event) => {
-        isDragging = true;
-        lastMouseX = event.clientX;
-        lastMouseY = event.clientY;
-        autoRotate = false; // Disable auto-rotation when user interacts
-    });
+  canvas.addEventListener('mousedown', (event) => {
+    isDragging = true;
+    lastMouseX = event.clientX;
+    lastMouseY = event.clientY;
+    autoRotate = false; // Disable auto-rotation when user interacts
+  });
 
-    canvas.addEventListener('mouseup', () => {
-        isDragging = false;
-    });
+  canvas.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
 
-    canvas.addEventListener('mouseleave', () => {
-        isDragging = false;
-    });
+  canvas.addEventListener('mouseleave', () => {
+    isDragging = false;
+  });
 
-    canvas.addEventListener('mousemove', (event) => {
-        if (!isDragging) return;
-        
-        const deltaX = event.clientX - lastMouseX;
-        const deltaY = event.clientY - lastMouseY;
-        
-        const rotationSpeed = 0.005;
-        rotationY += deltaX * rotationSpeed;
-        rotationX += deltaY * rotationSpeed;
-        
-        // Limit vertical rotation to avoid gimbal lock
-        rotationX = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, rotationX));
-        
-        lastMouseX = event.clientX;
-        lastMouseY = event.clientY;
-    });
+  canvas.addEventListener('mousemove', (event) => {
+    if (!isDragging) return;
 
-    canvas.addEventListener('wheel', (event) => {
-        event.preventDefault();
-        const zoomSpeed = 0.001;
-        zoomLevel += event.deltaY * zoomSpeed;
-        zoomLevel = Math.max(2, Math.min(20, zoomLevel));
-    });
+    const deltaX = event.clientX - lastMouseX;
+    const deltaY = event.clientY - lastMouseY;
 
-    // Double click to reset view
-    canvas.addEventListener('dblclick', () => {
-        rotationX = 0;
-        rotationY = 0;
-        zoomLevel = 5;
-        autoRotate = true;
-    });
+    const rotationSpeed = 0.005;
+    rotationY += deltaX * rotationSpeed;
+    rotationX += deltaY * rotationSpeed;
+
+    // Limit vertical rotation to avoid gimbal lock
+    rotationX = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, rotationX));
+
+    lastMouseX = event.clientX;
+    lastMouseY = event.clientY;
+  });
+
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const zoomSpeed = 0.001;
+    zoomLevel += event.deltaY * zoomSpeed;
+    zoomLevel = Math.max(2, Math.min(20, zoomLevel));
+  });
+
+  // Double click to reset view
+  canvas.addEventListener('dblclick', () => {
+    rotationX = 0;
+    rotationY = 0;
+    zoomLevel = 5;
+    autoRotate = true;
+  });
 }
 
 // Enhanced model view matrix calculation
 function updateModelViewMatrix() {
-    const modelViewMatrix = mat4.create();
-    mat4.translate(modelViewMatrix, modelViewMatrix, [0, 0, -zoomLevel]);
-    mat4.rotateX(modelViewMatrix, modelViewMatrix, rotationX);
-    mat4.rotateY(modelViewMatrix, modelViewMatrix, rotationY + (autoRotate ? performance.now() * autoRotateSpeed : 0));
-    return modelViewMatrix;
+  const modelViewMatrix = mat4.create();
+  mat4.translate(modelViewMatrix, modelViewMatrix, [0, 0, -zoomLevel]);
+  mat4.rotateX(modelViewMatrix, modelViewMatrix, rotationX);
+  mat4.rotateY(modelViewMatrix, modelViewMatrix, rotationY + (autoRotate ? performance.now() * autoRotateSpeed : 0));
+  return modelViewMatrix;
 }
 
 async function loadMTL(url) {
@@ -199,6 +197,9 @@ async function loadMTL(url) {
       case 'Ns': // Shininess
         materials[currentMaterial].shininess = parseFloat(parts[1]);
         break;
+      case 'Ni': // Refraction index
+        materials[currentMaterial].refractionIndex = parseFloat(parts[1]);
+        break;
       case 'd': // Opacity
         materials[currentMaterial].opacity = parseFloat(parts[1]);
         break;
@@ -213,7 +214,7 @@ async function loadOBJ(objUrl, mtlUrl) {
     fetch(objUrl),
     mtlUrl ? loadMTL(mtlUrl) : Promise.resolve(null)
   ]);
-  
+
   const objText = await objResponse.text();
 
   const positions = [];
@@ -243,32 +244,32 @@ async function loadOBJ(objUrl, mtlUrl) {
         break;
       case "f":
         const faceVertices = parts.slice(1).map(v => parseInt(v.split("/")[0]) - 1);
-        
+
         // Calculate face normal using Newell's method
         let nx = 0, ny = 0, nz = 0;
         for (let i = 0; i < faceVertices.length; i++) {
           const v1 = faceVertices[i];
           const v2 = faceVertices[(i + 1) % faceVertices.length];
-          
+
           const x1 = positions[v1 * 3];
           const y1 = positions[v1 * 3 + 1];
           const z1 = positions[v1 * 3 + 2];
           const x2 = positions[v2 * 3];
           const y2 = positions[v2 * 3 + 1];
           const z2 = positions[v2 * 3 + 2];
-          
+
           nx += (y1 - y2) * (z1 + z2);
           ny += (z1 - z2) * (x1 + x2);
           nz += (x1 - x2) * (y1 + y2);
         }
-        
+
         const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (length > 0) {
           nx /= length;
           ny /= length;
           nz /= length;
         }
-        
+
         for (const vertex of faceVertices) {
           if (!tempNormals.has(vertex)) {
             tempNormals.set(vertex, [0, 0, 0]);
@@ -278,12 +279,12 @@ async function loadOBJ(objUrl, mtlUrl) {
           n[1] += ny;
           n[2] += nz;
         }
-        
+
         // Triangulate face
         for (let i = 1; i < faceVertices.length - 1; i++) {
           indices.push(faceVertices[0], faceVertices[i], faceVertices[i + 1]);
           materialIndices.push(currentMaterial, currentMaterial, currentMaterial);
-          
+
           // Update material group index count
           if (materialGroups[currentMaterial]) {
             materialGroups[currentMaterial].indexCount += 3;
@@ -324,7 +325,7 @@ async function loadOBJ(objUrl, mtlUrl) {
     (minY + maxY) / 2,
     (minZ + maxZ) / 2
   ];
-  
+
   const scale = 2 / Math.max(maxX - minX, maxY - minY, maxZ - minZ);
 
   for (let i = 0; i < positions.length; i += 3) {
@@ -333,11 +334,11 @@ async function loadOBJ(objUrl, mtlUrl) {
     positions[i + 2] = (positions[i + 2] - center[2]) * scale;
   }
 
-  return { 
-    positions, 
-    normals: normalArray, 
-    indices, 
-    materialIndices, 
+  return {
+    positions,
+    normals: normalArray,
+    indices,
+    materialIndices,
     materialGroups,
     materials: mtlResponse || {}
   };
@@ -376,7 +377,7 @@ function compileShader(gl, source, type) {
 
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     console.error(
-      `Shader compile error in ${type === gl.VERTEX_SHADER ? "vertex" : "fragment"} shader:`, 
+      `Shader compile error in ${type === gl.VERTEX_SHADER ? "vertex" : "fragment"} shader:`,
       gl.getShaderInfoLog(shader)
     );
     gl.deleteShader(shader);
@@ -402,9 +403,7 @@ function createBuffers(gl, obj) {
   return { positionBuffer, normalBuffer, indexBuffer };
 }
 
-// Rest of the code remains largely the same, but with enhanced uniform setup
 async function main() {
-  // Load OBJ with associated MTL
   const obj = await loadOBJ("model.obj", "model.mtl");
   const program = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
   gl.useProgram(program);
@@ -435,7 +434,9 @@ async function main() {
     uSpecularColor: gl.getUniformLocation(program, "uSpecularColor"),
     uShininess: gl.getUniformLocation(program, "uShininess"),
     uRimLightIntensity: gl.getUniformLocation(program, "uRimLightIntensity"),
-    uRimLightColor: gl.getUniformLocation(program, "uRimLightColor")
+    uRimLightColor: gl.getUniformLocation(program, "uRimLightColor"),
+    uOpacity: gl.getUniformLocation(program, "uOpacity"),
+    uRefractionIndex: gl.getUniformLocation(program, "uRefractionIndex")
   };
 
   const projectionMatrix = mat4.create();
@@ -444,7 +445,7 @@ async function main() {
 
   // Render function with multi-material support
   function render() {
-    gl.clearColor(0.95, 0.95, 0.95, 1.0);
+    gl.clearColor(0.8, 0.9, 1.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     const modelViewMatrix = updateModelViewMatrix();
@@ -470,12 +471,17 @@ async function main() {
       gl.uniform3fv(uniforms.uDiffuseColor, material.diffuse);
       gl.uniform3fv(uniforms.uSpecularColor, material.specular);
       gl.uniform1f(uniforms.uShininess, material.shininess);
+      gl.uniform1f(uniforms.uOpacity, material.opacity);
+      gl.uniform1f(uniforms.uRefractionIndex, material.refractionIndex || 1.5);
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
       // Draw the specific material group
       gl.drawElements(
-        gl.TRIANGLES, 
-        group.indexCount, 
-        gl.UNSIGNED_SHORT, 
+        gl.TRIANGLES,
+        group.indexCount,
+        gl.UNSIGNED_SHORT,
         group.startIndex * 2  // 2 bytes per index
       );
     }
